@@ -1,0 +1,15 @@
+{
+  "vault": {
+    "path": "/Users/adam/Obsidian/Personal",
+    "name": "Personal",
+    "folder": "Tasks"
+  },
+  "property": "due",
+  "server": {
+    "host": "0.0.0.0",
+    "port": 5232,
+    "username": "adam",
+    "password": "change-me"
+  },
+  "state_dir": "./state"
+}
