@@ -5,8 +5,6 @@ import type { Store } from "../db.js";
 import type { Logger } from "../logger.js";
 
 export interface WriterOptions {
-  vaultRoot: string;
-  property: string;
   store: Store;
   logger: Logger;
 }
@@ -27,25 +25,30 @@ function sanitizeFilename(name: string): string {
 
 /**
  * Update or remove a frontmatter property on a file. Round-trips the rest of
- * the YAML and the body via gray-matter. Records the post-write mtime so the
- * watcher can suppress its own echo.
+ * the YAML and the body via gray-matter. Records the post-write absolute path
+ * so the watcher can suppress its own echo.
  */
 export class VaultWriter {
   constructor(private readonly opts: WriterOptions) {}
 
   /** Set property to `value` (or unset if value === null). Returns true if file changed. */
-  async setDateProperty(vaultPath: string, value: string | null): Promise<boolean> {
-    const absPath = join(this.opts.vaultRoot, vaultPath);
+  async setDateProperty(
+    vaultRoot: string,
+    vaultPath: string,
+    property: string,
+    value: string | null,
+  ): Promise<boolean> {
+    const absPath = join(vaultRoot, vaultPath);
     const original = await readFile(absPath, "utf8");
     const parsed = matter(original);
     const data = { ...(parsed.data as Record<string, unknown>) };
 
     if (value === null) {
-      if (!(this.opts.property in data)) return false;
-      delete data[this.opts.property];
+      if (!(property in data)) return false;
+      delete data[property];
     } else {
-      if (data[this.opts.property] === value) return false;
-      data[this.opts.property] = value;
+      if (data[property] === value) return false;
+      data[property] = value;
     }
 
     const next = matter.stringify(parsed.content, data);
@@ -53,9 +56,9 @@ export class VaultWriter {
 
     await writeFile(absPath, next, "utf8");
     const st = await stat(absPath);
-    this.opts.store.recordPendingWrite(vaultPath, st.mtimeMs);
+    this.opts.store.recordPendingWrite(absPath, st.mtimeMs);
     this.opts.logger.info(
-      { vaultPath, property: this.opts.property, value },
+      { vaultPath, property, value },
       "wrote frontmatter property",
     );
     return true;
@@ -67,10 +70,14 @@ export class VaultWriter {
    *
    * Throws if the target path already exists, to avoid silent overwrites.
    */
-  async renameToTitle(vaultPath: string, newTitle: string): Promise<string | null> {
+  async renameToTitle(
+    vaultRoot: string,
+    vaultPath: string,
+    newTitle: string,
+  ): Promise<string | null> {
     const sanitized = sanitizeFilename(newTitle);
     if (!sanitized) return null;
-    const absOld = join(this.opts.vaultRoot, vaultPath);
+    const absOld = join(vaultRoot, vaultPath);
     const dir = dirname(absOld);
     const absNew = join(dir, `${sanitized}.md`);
     if (absOld === absNew) return null;
@@ -79,7 +86,7 @@ export class VaultWriter {
     try {
       await stat(absNew);
       this.opts.logger.warn(
-        { from: vaultPath, to: relative(this.opts.vaultRoot, absNew) },
+        { from: vaultPath, to: relative(vaultRoot, absNew) },
         "rename target exists, skipping",
       );
       return null;
@@ -88,11 +95,11 @@ export class VaultWriter {
     }
 
     await rename(absOld, absNew);
-    const newRel = toPosix(relative(this.opts.vaultRoot, absNew));
+    const newRel = toPosix(relative(vaultRoot, absNew));
     const st = await stat(absNew);
-    this.opts.store.recordPendingWrite(newRel, st.mtimeMs);
-    // Also record the old path so the watcher's "deleted" event is suppressed.
-    this.opts.store.recordPendingWrite(vaultPath, 0);
+    this.opts.store.recordPendingWrite(absNew, st.mtimeMs);
+    // Also record the old absolute path so the watcher's "deleted" event is suppressed.
+    this.opts.store.recordPendingWrite(absOld, 0);
     this.opts.logger.info({ from: vaultPath, to: newRel }, "renamed file");
     return newRel;
   }

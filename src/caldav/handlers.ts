@@ -1,5 +1,6 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
 import type { Store } from "../db.js";
+import type { ResolvedCalendar } from "../config.js";
 import {
   buildMultistatus,
   collectRequestedProps,
@@ -13,10 +14,14 @@ import { renderEvent } from "./ics.js";
 export interface HandlerContext {
   store: Store;
   username: string;
-  vaultName: string;
+  calendars: ResolvedCalendar[];
+  calendarsById: Map<string, ResolvedCalendar>;
+  /** Empty string or `/segment` — prepended to all emitted hrefs and stripped from incoming URLs. */
+  basePath: string;
 }
 
 const ALLOWED_METHODS = "OPTIONS, GET, HEAD, PUT, DELETE, PROPFIND, REPORT";
+const DEFAULT_COLOR = "#7C3AED";
 
 export function handleOptions(_req: FastifyRequest, reply: FastifyReply): void {
   reply
@@ -27,37 +32,97 @@ export function handleOptions(_req: FastifyRequest, reply: FastifyReply): void {
     .send();
 }
 
-function calendarHomePath(user: string): string {
-  return `/calendars/${encodeURIComponent(user)}/`;
+// --- URL routing ---------------------------------------------------------
+
+export type Route =
+  | { kind: "root" }
+  | { kind: "principal" }
+  | { kind: "calendar-home" }
+  | { kind: "calendar"; calendarId: string }
+  | { kind: "event"; calendarId: string; uid: string }
+  | { kind: "unknown" };
+
+function calendarHomePath(ctx: HandlerContext): string {
+  return `${ctx.basePath}/calendars/${encodeURIComponent(ctx.username)}/`;
 }
 
-function principalPath(user: string): string {
-  return `/principals/${encodeURIComponent(user)}/`;
+function principalPath(ctx: HandlerContext): string {
+  return `${ctx.basePath}/principals/${encodeURIComponent(ctx.username)}/`;
 }
 
-function calendarPath(user: string): string {
-  return `/calendars/${encodeURIComponent(user)}/tasks/`;
+export function calendarPath(ctx: HandlerContext, calendarId: string): string {
+  return `${ctx.basePath}/calendars/${encodeURIComponent(ctx.username)}/${encodeURIComponent(calendarId)}/`;
 }
 
-function eventPath(user: string, uid: string): string {
-  return `/calendars/${encodeURIComponent(user)}/tasks/${encodeURIComponent(uid)}.ics`;
+export function eventPath(ctx: HandlerContext, calendarId: string, uid: string): string {
+  return `${ctx.basePath}/calendars/${encodeURIComponent(ctx.username)}/${encodeURIComponent(calendarId)}/${encodeURIComponent(uid)}.ics`;
 }
+
+export function resolveRoute(rawUrl: string, ctx: HandlerContext): Route {
+  let url = rawUrl.split("?")[0]!;
+
+  // Lenient prefix handling: if the configured base_path is present on the
+  // incoming URL, strip it. If it isn't, fall through and match at root.
+  // This lets a single config (`base_path`) work behind both proxies that
+  // preserve the prefix and proxies that strip it (e.g. Tailscale Serve),
+  // while always emitting hrefs WITH the prefix so clients walk back through
+  // the proxy correctly.
+  if (ctx.basePath !== "") {
+    if (url === ctx.basePath || url === `${ctx.basePath}/`) {
+      url = "/";
+    } else if (url.startsWith(`${ctx.basePath}/`)) {
+      url = url.slice(ctx.basePath.length);
+    }
+  }
+
+  if (url === "/" || url === "") return { kind: "root" };
+
+  const principalLocal = `/principals/${encodeURIComponent(ctx.username)}/`;
+  if (url === principalLocal || url === principalLocal.replace(/\/$/, "")) {
+    return { kind: "principal" };
+  }
+
+  const homeLocal = `/calendars/${encodeURIComponent(ctx.username)}/`;
+  if (url === homeLocal || url === homeLocal.replace(/\/$/, "")) {
+    return { kind: "calendar-home" };
+  }
+
+  // /calendars/<user>/<calId>/ or /calendars/<user>/<calId>/<uid>.ics
+  const userPrefix = `/calendars/${encodeURIComponent(ctx.username)}/`;
+  if (!url.startsWith(userPrefix)) return { kind: "unknown" };
+  const rest = url.slice(userPrefix.length);
+  const slashIdx = rest.indexOf("/");
+  const calIdRaw = slashIdx >= 0 ? rest.slice(0, slashIdx) : rest;
+  const calendarId = decodeURIComponent(calIdRaw);
+  if (!ctx.calendarsById.has(calendarId)) return { kind: "unknown" };
+
+  const tail = slashIdx >= 0 ? rest.slice(slashIdx + 1) : "";
+  if (tail === "" || tail === "/") return { kind: "calendar", calendarId };
+
+  const eventMatch = /^([^/]+)\.ics$/.exec(tail);
+  if (eventMatch) {
+    const uid = decodeURIComponent(eventMatch[1]!);
+    return { kind: "event", calendarId, uid };
+  }
+
+  return { kind: "unknown" };
+}
+
+// --- Property builders ---------------------------------------------------
 
 function rootProps(ctx: HandlerContext, requested: string[]): Record<string, string | undefined> {
   const out: Record<string, string | undefined> = {};
   for (const name of requested) {
     switch (name) {
       case "current-user-principal":
-        out[name] = `<d:href>${principalPath(ctx.username)}</d:href>`;
-        break;
       case "principal-URL":
-        out[name] = `<d:href>${principalPath(ctx.username)}</d:href>`;
+        out[name] = `<d:href>${principalPath(ctx)}</d:href>`;
         break;
       case "resourcetype":
         out[name] = `<d:collection/>`;
         break;
       case "displayname":
-        out[name] = escapeXml("obsidian-ical");
+        out[name] = escapeXml("obsidian-caldav");
         break;
       default:
         out[name] = undefined;
@@ -75,10 +140,10 @@ function principalProps(
     switch (name) {
       case "current-user-principal":
       case "principal-URL":
-        out[name] = `<d:href>${principalPath(ctx.username)}</d:href>`;
+        out[name] = `<d:href>${principalPath(ctx)}</d:href>`;
         break;
       case "calendar-home-set":
-        out[name] = `<d:href>${calendarHomePath(ctx.username)}</d:href>`;
+        out[name] = `<d:href>${calendarHomePath(ctx)}</d:href>`;
         break;
       case "displayname":
         out[name] = escapeXml(ctx.username);
@@ -107,7 +172,7 @@ function calendarHomeProps(
         out[name] = escapeXml("Calendars");
         break;
       case "current-user-principal":
-        out[name] = `<d:href>${principalPath(ctx.username)}</d:href>`;
+        out[name] = `<d:href>${principalPath(ctx)}</d:href>`;
         break;
       default:
         out[name] = undefined;
@@ -118,9 +183,10 @@ function calendarHomeProps(
 
 function calendarProps(
   ctx: HandlerContext,
+  cal: ResolvedCalendar,
   requested: string[],
 ): Record<string, string | undefined> {
-  const ctag = ctx.store.getCtag();
+  const ctag = ctx.store.getCtag(cal.id);
   const out: Record<string, string | undefined> = {};
   for (const name of requested) {
     switch (name) {
@@ -128,10 +194,12 @@ function calendarProps(
         out[name] = `<d:collection/><c:calendar/>`;
         break;
       case "displayname":
-        out[name] = escapeXml("Obsidian Tasks");
+        out[name] = escapeXml(cal.name);
         break;
       case "calendar-description":
-        out[name] = escapeXml("Tasks from Obsidian frontmatter dates");
+        out[name] = escapeXml(
+          cal.description ?? `Tasks from ${cal.folder} (${cal.property})`,
+        );
         break;
       case "supported-calendar-component-set":
         out[name] = `<c:comp name="VEVENT"/>`;
@@ -140,17 +208,17 @@ function calendarProps(
         out[name] = escapeXml(ctag);
         break;
       case "calendar-color":
-        out[name] = `#7C3AED`;
+        out[name] = escapeXml(cal.color ?? DEFAULT_COLOR);
         break;
       case "current-user-principal":
-        out[name] = `<d:href>${principalPath(ctx.username)}</d:href>`;
+        out[name] = `<d:href>${principalPath(ctx)}</d:href>`;
         break;
       case "current-user-privilege-set":
         out[name] =
           `<d:privilege><d:read/></d:privilege><d:privilege><d:write/></d:privilege><d:privilege><d:write-properties/></d:privilege><d:privilege><d:write-content/></d:privilege>`;
         break;
       case "owner":
-        out[name] = `<d:href>${principalPath(ctx.username)}</d:href>`;
+        out[name] = `<d:href>${principalPath(ctx)}</d:href>`;
         break;
       case "supported-report-set":
         out[name] = [
@@ -166,7 +234,6 @@ function calendarProps(
 }
 
 function eventProps(
-  uid: string,
   etag: string,
   body: string,
   requested: string[],
@@ -190,10 +257,11 @@ function eventProps(
       default:
         out[name] = undefined;
     }
-    void uid;
   }
   return out;
 }
+
+// --- Method handlers -----------------------------------------------------
 
 export async function handlePropfind(
   req: FastifyRequest,
@@ -201,7 +269,6 @@ export async function handlePropfind(
   ctx: HandlerContext,
 ): Promise<void> {
   const depth = String(req.headers["depth"] ?? "0");
-  const url = req.url.split("?")[0]!;
   const body = typeof req.body === "string" ? req.body : "";
   const parsed = parseDavXml(body);
   let requested = collectRequestedProps(parsed);
@@ -216,47 +283,64 @@ export async function handlePropfind(
     ];
   }
 
+  const route = resolveRoute(req.url, ctx);
   const responses: PropResponse[] = [];
-  const calRoot = calendarPath(ctx.username);
-  const calHome = calendarHomePath(ctx.username);
-  const principal = principalPath(ctx.username);
 
-  if (url === "/" || url === "") {
-    responses.push({ href: "/", props: rootProps(ctx, requested) });
-  } else if (url === principal || url === principal.replace(/\/$/, "")) {
-    responses.push({ href: principal, props: principalProps(ctx, requested) });
-  } else if (url === calHome || url === calHome.replace(/\/$/, "")) {
-    responses.push({ href: calHome, props: calendarHomeProps(ctx, requested) });
-    if (depth !== "0") {
-      responses.push({ href: calRoot, props: calendarProps(ctx, requested) });
+  switch (route.kind) {
+    case "root": {
+      responses.push({ href: "/", props: rootProps(ctx, requested) });
+      break;
     }
-  } else if (url === calRoot || url === calRoot.replace(/\/$/, "")) {
-    responses.push({ href: calRoot, props: calendarProps(ctx, requested) });
-    if (depth !== "0") {
-      for (const ev of ctx.store.getAllLiveEvents()) {
-        const body = renderEvent(ev, ctx.vaultName);
-        responses.push({
-          href: eventPath(ctx.username, ev.uid),
-          props: eventProps(ev.uid, ev.etag, body, requested, false),
-        });
+    case "principal": {
+      const principal = principalPath(ctx);
+      responses.push({ href: principal, props: principalProps(ctx, requested) });
+      break;
+    }
+    case "calendar-home": {
+      const home = calendarHomePath(ctx);
+      responses.push({ href: home, props: calendarHomeProps(ctx, requested) });
+      if (depth !== "0") {
+        for (const cal of ctx.calendars) {
+          responses.push({
+            href: calendarPath(ctx, cal.id),
+            props: calendarProps(ctx, cal, requested),
+          });
+        }
       }
+      break;
     }
-  } else {
-    // Possibly an event resource
-    const m = /^\/calendars\/[^/]+\/tasks\/([^/]+)\.ics$/.exec(url);
-    if (m) {
-      const uid = decodeURIComponent(m[1]!);
-      const ev = ctx.store.getEventByUid(uid);
-      if (!ev || ev.tombstoned) {
+    case "calendar": {
+      const cal = ctx.calendarsById.get(route.calendarId)!;
+      responses.push({
+        href: calendarPath(ctx, cal.id),
+        props: calendarProps(ctx, cal, requested),
+      });
+      if (depth !== "0") {
+        for (const ev of ctx.store.getAllLiveEvents(cal.id)) {
+          const renderedBody = renderEvent(ev, cal.vault_name);
+          responses.push({
+            href: eventPath(ctx, cal.id, ev.uid),
+            props: eventProps(ev.etag, renderedBody, requested, false),
+          });
+        }
+      }
+      break;
+    }
+    case "event": {
+      const ev = ctx.store.getEventByUid(route.uid);
+      if (!ev || ev.tombstoned || ev.calendar_id !== route.calendarId) {
         reply.code(404).send();
         return;
       }
-      const body = renderEvent(ev, ctx.vaultName);
+      const cal = ctx.calendarsById.get(route.calendarId)!;
+      const renderedBody = renderEvent(ev, cal.vault_name);
       responses.push({
-        href: eventPath(ctx.username, ev.uid),
-        props: eventProps(ev.uid, ev.etag, body, requested, false),
+        href: eventPath(ctx, route.calendarId, ev.uid),
+        props: eventProps(ev.etag, renderedBody, requested, false),
       });
-    } else {
+      break;
+    }
+    case "unknown": {
       reply.code(404).send();
       return;
     }
@@ -274,12 +358,12 @@ export async function handleReport(
   reply: FastifyReply,
   ctx: HandlerContext,
 ): Promise<void> {
-  const url = req.url.split("?")[0]!;
-  const calRoot = calendarPath(ctx.username);
-  if (url !== calRoot && url !== calRoot.replace(/\/$/, "")) {
+  const route = resolveRoute(req.url, ctx);
+  if (route.kind !== "calendar") {
     reply.code(404).send();
     return;
   }
+  const cal = ctx.calendarsById.get(route.calendarId)!;
   const body = typeof req.body === "string" ? req.body : "";
   const parsed = parseDavXml(body) as Record<string, unknown>;
 
@@ -309,23 +393,25 @@ export async function handleReport(
   const responses: PropResponse[] = [];
   if (hrefsToFetch) {
     for (const href of hrefsToFetch) {
-      const m = /\/tasks\/([^/]+)\.ics$/.exec(href);
+      const m = /\/([^/]+)\/([^/]+)\.ics$/.exec(href);
       if (!m) continue;
-      const uid = decodeURIComponent(m[1]!);
+      const hrefCalId = decodeURIComponent(m[1]!);
+      if (hrefCalId !== cal.id) continue;
+      const uid = decodeURIComponent(m[2]!);
       const ev = ctx.store.getEventByUid(uid);
-      if (!ev || ev.tombstoned) continue;
-      const body = renderEvent(ev, ctx.vaultName);
+      if (!ev || ev.tombstoned || ev.calendar_id !== cal.id) continue;
+      const renderedBody = renderEvent(ev, cal.vault_name);
       responses.push({
         href,
-        props: eventProps(ev.uid, ev.etag, body, requested, true),
+        props: eventProps(ev.etag, renderedBody, requested, true),
       });
     }
   } else {
-    for (const ev of ctx.store.getAllLiveEvents()) {
-      const body = renderEvent(ev, ctx.vaultName);
+    for (const ev of ctx.store.getAllLiveEvents(cal.id)) {
+      const renderedBody = renderEvent(ev, cal.vault_name);
       responses.push({
-        href: eventPath(ctx.username, ev.uid),
-        props: eventProps(ev.uid, ev.etag, body, requested, true),
+        href: eventPath(ctx, cal.id, ev.uid),
+        props: eventProps(ev.etag, renderedBody, requested, true),
       });
     }
   }
@@ -342,19 +428,18 @@ export async function handleGet(
   reply: FastifyReply,
   ctx: HandlerContext,
 ): Promise<void> {
-  const url = req.url.split("?")[0]!;
-  const m = /^\/calendars\/[^/]+\/tasks\/([^/]+)\.ics$/.exec(url);
-  if (!m) {
+  const route = resolveRoute(req.url, ctx);
+  if (route.kind !== "event") {
     reply.code(404).send();
     return;
   }
-  const uid = decodeURIComponent(m[1]!);
-  const ev = ctx.store.getEventByUid(uid);
-  if (!ev || ev.tombstoned) {
+  const ev = ctx.store.getEventByUid(route.uid);
+  if (!ev || ev.tombstoned || ev.calendar_id !== route.calendarId) {
     reply.code(404).send();
     return;
   }
-  const body = renderEvent(ev, ctx.vaultName);
+  const cal = ctx.calendarsById.get(route.calendarId)!;
+  const body = renderEvent(ev, cal.vault_name);
   reply
     .header("ETag", ev.etag)
     .header("Content-Type", "text/calendar; charset=utf-8")

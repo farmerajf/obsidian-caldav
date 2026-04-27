@@ -1,11 +1,11 @@
 {
-  "name": "obsidian-ical",
+  "name": "obsidian-caldav",
   "version": "0.1.0",
   "description": "Two-way CalDAV sync between Obsidian frontmatter dates and Apple Calendar.",
   "type": "module",
   "private": true,
   "bin": {
-    "obsidian-ical": "./dist/index.js"
+    "obsidian-caldav": "./dist/index.js"
   },
   "scripts": {
     "build": "tsc",

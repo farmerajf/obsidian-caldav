@@ -7,8 +7,8 @@ import { VaultWriter } from "../src/vault/writer.js";
 import { silentLogger as logger } from "./helpers.js";
 
 function tmp(): { vault: string; store: Store } {
-  const vault = mkdtempSync(join(tmpdir(), "ical-writer-vault-"));
-  const stateDir = mkdtempSync(join(tmpdir(), "ical-writer-state-"));
+  const vault = mkdtempSync(join(tmpdir(), "caldav-writer-vault-"));
+  const stateDir = mkdtempSync(join(tmpdir(), "caldav-writer-state-"));
   return { vault, store: new Store(stateDir) };
 }
 
@@ -20,9 +20,9 @@ describe("VaultWriter.setDateProperty", () => {
       file,
       `---\ndue: 2026-05-01\nstatus: open\ntags: [work, urgent]\n---\n\n# Title\n\nBody content.\n`,
     );
-    const w = new VaultWriter({ vaultRoot: vault, property: "due", store, logger });
+    const w = new VaultWriter({ store, logger });
 
-    const changed = await w.setDateProperty("task.md", "2026-05-15");
+    const changed = await w.setDateProperty(vault, "task.md", "due", "2026-05-15");
     expect(changed).toBe(true);
 
     const after = readFileSync(file, "utf8");
@@ -37,9 +37,9 @@ describe("VaultWriter.setDateProperty", () => {
     const { vault, store } = tmp();
     const file = join(vault, "task.md");
     writeFileSync(file, `---\ndue: 2026-05-01\nstatus: open\n---\n`);
-    const w = new VaultWriter({ vaultRoot: vault, property: "due", store, logger });
+    const w = new VaultWriter({ store, logger });
 
-    await w.setDateProperty("task.md", null);
+    await w.setDateProperty(vault, "task.md", "due", null);
     const after = readFileSync(file, "utf8");
     expect(after).not.toMatch(/due:/);
     expect(after).toMatch(/status:\s*open/);
@@ -49,9 +49,9 @@ describe("VaultWriter.setDateProperty", () => {
     const { vault, store } = tmp();
     const file = join(vault, "task.md");
     writeFileSync(file, `---\ndue: '2026-05-01'\n---\n`);
-    const w = new VaultWriter({ vaultRoot: vault, property: "due", store, logger });
+    const w = new VaultWriter({ store, logger });
 
-    const changed = await w.setDateProperty("task.md", "2026-05-01");
+    const changed = await w.setDateProperty(vault, "task.md", "due", "2026-05-01");
     expect(changed).toBe(false);
   });
 
@@ -59,12 +59,12 @@ describe("VaultWriter.setDateProperty", () => {
     const { vault, store } = tmp();
     const file = join(vault, "task.md");
     writeFileSync(file, `---\ndue: 2026-05-01\n---\n`);
-    const w = new VaultWriter({ vaultRoot: vault, property: "due", store, logger });
+    const w = new VaultWriter({ store, logger });
 
-    await w.setDateProperty("task.md", "2026-05-09");
+    await w.setDateProperty(vault, "task.md", "due", "2026-05-09");
     const stat = (await import("node:fs/promises")).stat;
     const st = await stat(file);
-    expect(store.consumePendingWrite("task.md", st.mtimeMs)).toBe(true);
+    expect(store.consumePendingWrite(file, st.mtimeMs)).toBe(true);
   });
 });
 
@@ -75,9 +75,9 @@ describe("VaultWriter.renameToTitle", () => {
     const fs = await import("node:fs/promises");
     await fs.mkdir(join(vault, "Tasks"));
     writeFileSync(file, `---\ndue: 2026-05-01\n---\n`);
-    const w = new VaultWriter({ vaultRoot: vault, property: "due", store, logger });
+    const w = new VaultWriter({ store, logger });
 
-    const newPath = await w.renameToTitle("Tasks/old.md", "New / Title?");
+    const newPath = await w.renameToTitle(vault, "Tasks/old.md", "New / Title?");
     expect(newPath).toBe("Tasks/New - Title-.md");
     const exists = await fs
       .stat(join(vault, "Tasks/New - Title-.md"))
@@ -90,9 +90,9 @@ describe("VaultWriter.renameToTitle", () => {
     const fs = await import("node:fs/promises");
     writeFileSync(join(vault, "a.md"), `---\ndue: 2026-05-01\n---\n`);
     writeFileSync(join(vault, "b.md"), `---\ndue: 2026-05-02\n---\n`);
-    const w = new VaultWriter({ vaultRoot: vault, property: "due", store, logger });
+    const w = new VaultWriter({ store, logger });
 
-    const result = await w.renameToTitle("a.md", "b");
+    const result = await w.renameToTitle(vault, "a.md", "b");
     expect(result).toBeNull();
     // Both files still exist
     expect(await fs.stat(join(vault, "a.md")).then(() => true)).toBe(true);

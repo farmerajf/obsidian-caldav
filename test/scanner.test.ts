@@ -42,7 +42,7 @@ describe("isAllDay", () => {
 
 describe("scanVault", () => {
   function fixtureVault(): string {
-    const root = mkdtempSync(join(tmpdir(), "ical-vault-"));
+    const root = mkdtempSync(join(tmpdir(), "caldav-vault-"));
     const tasks = join(root, "Tasks");
     mkdirSync(tasks, { recursive: true });
     mkdirSync(join(root, ".obsidian"), { recursive: true });
@@ -96,7 +96,7 @@ describe("scanVault", () => {
   });
 
   it("respects a different property name", async () => {
-    const root = mkdtempSync(join(tmpdir(), "ical-vault-"));
+    const root = mkdtempSync(join(tmpdir(), "caldav-vault-"));
     writeFileSync(
       join(root, "a.md"),
       `---\nscheduled: 2026-06-01\n---\n`,

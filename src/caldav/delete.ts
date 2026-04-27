@@ -1,5 +1,5 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
-import type { HandlerContext } from "./handlers.js";
+import { resolveRoute, type HandlerContext } from "./handlers.js";
 import type { VaultWriter } from "../vault/writer.js";
 import type { Logger } from "../logger.js";
 
@@ -10,30 +10,40 @@ export async function handleDelete(
   writer: VaultWriter,
   logger: Logger,
 ): Promise<void> {
-  const url = req.url.split("?")[0]!;
-  const m = /^\/calendars\/[^/]+\/tasks\/([^/]+)\.ics$/.exec(url);
-  if (!m) {
+  const route = resolveRoute(req.url, ctx);
+  if (route.kind !== "event") {
     reply.code(404).send();
     return;
   }
-  const uid = decodeURIComponent(m[1]!);
-  const ev = ctx.store.getEventByUid(uid);
-  if (!ev || ev.tombstoned) {
+  const cal = ctx.calendarsById.get(route.calendarId)!;
+  const ev = ctx.store.getEventByUid(route.uid);
+  if (!ev || ev.tombstoned || ev.calendar_id !== cal.id) {
     reply.code(404).send();
     return;
   }
 
   try {
-    await writer.setDateProperty(ev.vault_path, null);
+    await writer.setDateProperty(
+      cal.resolvedVaultPath,
+      ev.vault_path,
+      cal.property,
+      null,
+    );
   } catch (err) {
-    logger.error({ err, uid, vaultPath: ev.vault_path }, "DELETE: clearing date failed");
+    logger.error(
+      { err, uid: ev.uid, calendarId: cal.id, vaultPath: ev.vault_path },
+      "DELETE: clearing date failed",
+    );
     reply.code(500).send();
     return;
   }
 
-  ctx.store.tombstone(uid);
-  ctx.store.bumpCtag();
-  logger.info({ uid, vaultPath: ev.vault_path }, "event deleted (date property cleared)");
+  ctx.store.tombstone(ev.uid);
+  ctx.store.bumpCtag(cal.id);
+  logger.info(
+    { uid: ev.uid, calendarId: cal.id, vaultPath: ev.vault_path },
+    "event deleted (date property cleared)",
+  );
 
   reply.code(204).send();
 }

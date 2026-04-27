@@ -2,6 +2,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import { timingSafeEqual } from "node:crypto";
 import type { Store } from "../db.js";
 import type { Logger } from "../logger.js";
+import type { ResolvedCalendar } from "../config.js";
 import {
   handleGet,
   handleOptions,
@@ -19,9 +20,11 @@ export interface ServerOptions {
   username: string;
   password: string;
   store: Store;
-  vaultName: string;
+  calendars: ResolvedCalendar[];
   writer: VaultWriter;
   logger: Logger;
+  /** Empty string or `/segment`. Prepended to all emitted hrefs and stripped from incoming URLs. */
+  basePath: string;
 }
 
 function checkBasicAuth(header: string | undefined, user: string, pass: string): boolean {
@@ -61,10 +64,13 @@ export async function buildServer(opts: ServerOptions): Promise<FastifyInstance>
     done(null, body);
   });
 
+  const calendarsById = new Map(opts.calendars.map((c) => [c.id, c]));
   const ctx: HandlerContext = {
     store: opts.store,
     username: opts.username,
-    vaultName: opts.vaultName,
+    calendars: opts.calendars,
+    calendarsById,
+    basePath: opts.basePath,
   };
 
   app.addHook("onRequest", async (req, reply) => {
@@ -78,7 +84,7 @@ export async function buildServer(opts: ServerOptions): Promise<FastifyInstance>
     if (req.method === "OPTIONS") return;
     if (!checkBasicAuth(req.headers.authorization, opts.username, opts.password)) {
       reply
-        .header("WWW-Authenticate", `Basic realm="obsidian-ical"`)
+        .header("WWW-Authenticate", `Basic realm="obsidian-caldav"`)
         .code(401)
         .send();
     }

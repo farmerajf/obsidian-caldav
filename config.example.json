@@ -1,15 +1,30 @@
 {
-  "vault": {
-    "path": "/Users/adam/Obsidian/Personal",
-    "name": "Personal",
-    "folder": "Tasks"
-  },
-  "property": "due",
+  "calendars": [
+    {
+      "id": "personal-tasks",
+      "name": "Personal Tasks",
+      "vault_path": "/Users/adam/Obsidian/Personal",
+      "vault_name": "Personal",
+      "folder": "Tasks",
+      "property": "due",
+      "color": "#7C3AED"
+    },
+    {
+      "id": "work-events",
+      "name": "Work Events",
+      "vault_path": "/Users/adam/Obsidian/Work",
+      "vault_name": "Work",
+      "folder": "Events",
+      "property": "scheduled",
+      "color": "#0EA5E9"
+    }
+  ],
   "server": {
     "host": "0.0.0.0",
     "port": 5232,
     "username": "adam",
-    "password": "change-me"
+    "password": "change-me",
+    "base_path": ""
   },
   "state_dir": "./state"
 }

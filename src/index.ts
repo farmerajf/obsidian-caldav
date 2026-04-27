@@ -18,7 +18,7 @@ async function main(): Promise<void> {
 
   if (values.help) {
     console.log(
-      `obsidian-ical — CalDAV server for Obsidian frontmatter dates\n\nUsage: obsidian-ical [--config <path>]\n\nDefault config path: ${defaultConfigPath()}\nOverride with --config or OBSIDIAN_ICAL_CONFIG.\n\nPassword precedence: OBSIDIAN_ICAL_PASSWORD env > server.password (inline) > server.password_file.`,
+      `obsidian-caldav — CalDAV server for Obsidian frontmatter dates\n\nUsage: obsidian-caldav [--config <path>]\n\nDefault config path: ${defaultConfigPath()}\nOverride with --config or OBSIDIAN_CALDAV_CONFIG.\n\nPassword precedence: OBSIDIAN_CALDAV_PASSWORD env > server.password (inline) > server.password_file.`,
     );
     return;
   }
@@ -32,38 +32,54 @@ async function main(): Promise<void> {
   const config = loadConfig(configPath);
   logger.info(
     {
-      vault: config.resolvedVaultPath,
-      folder: config.vault.folder || "(whole vault)",
-      property: config.property,
+      calendars: config.calendars.map((c) => ({
+        id: c.id,
+        name: c.name,
+        vault: c.vault_name,
+        folder: c.folder,
+        property: c.property,
+      })),
       stateDir: config.resolvedStateDir,
     },
     "loaded config",
   );
 
-  if (!existsSync(config.resolvedFolderAbs)) {
-    logger.error(
-      { path: config.resolvedFolderAbs },
-      "vault folder does not exist",
-    );
-    process.exit(1);
+  for (const cal of config.calendars) {
+    if (!existsSync(cal.resolvedVaultPath)) {
+      logger.error(
+        { calendarId: cal.id, path: cal.resolvedVaultPath },
+        "vault path does not exist",
+      );
+      process.exit(1);
+    }
+    if (!existsSync(cal.resolvedFolderAbs)) {
+      logger.error(
+        { calendarId: cal.id, path: cal.resolvedFolderAbs },
+        "calendar folder does not exist",
+      );
+      process.exit(1);
+    }
   }
 
   const store = new Store(config.resolvedStateDir);
-  const writer = new VaultWriter({
-    vaultRoot: config.resolvedVaultPath,
-    property: config.property,
-    store,
-    logger,
-  });
-  const watcher = new VaultWatcher({
-    vaultRoot: config.resolvedVaultPath,
-    scanRoot: config.resolvedFolderAbs,
-    property: config.property,
-    vaultName: config.vault.name,
-    store,
-    logger,
-  });
-  await watcher.start();
+  store.ensureCalendars(config.calendars.map((c) => c.id));
+
+  const writer = new VaultWriter({ store, logger });
+
+  const watchers: VaultWatcher[] = [];
+  for (const cal of config.calendars) {
+    const watcher = new VaultWatcher({
+      vaultRoot: cal.resolvedVaultPath,
+      scanRoot: cal.resolvedFolderAbs,
+      property: cal.property,
+      calendarId: cal.id,
+      vaultName: cal.vault_name,
+      store,
+      logger,
+    });
+    await watcher.start();
+    watchers.push(watcher);
+  }
 
   const server = await buildServer({
     host: config.server.host,
@@ -71,14 +87,18 @@ async function main(): Promise<void> {
     username: config.server.username,
     password: config.password,
     store,
-    vaultName: config.vault.name,
+    calendars: config.calendars,
     writer,
     logger,
+    basePath: config.basePath,
   });
 
   await server.listen({ host: config.server.host, port: config.server.port });
   logger.info(
-    { url: `http://${config.server.host}:${config.server.port}/` },
+    {
+      url: `http://${config.server.host}:${config.server.port}${config.basePath}/`,
+      basePath: config.basePath || "(root)",
+    },
     "CalDAV server listening",
   );
 
@@ -86,7 +106,7 @@ async function main(): Promise<void> {
     logger.info({ signal }, "shutting down");
     try {
       await server.close();
-      await watcher.stop();
+      for (const w of watchers) await w.stop();
       store.db.close();
     } catch (err) {
       logger.error({ err }, "shutdown error");

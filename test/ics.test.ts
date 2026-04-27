@@ -18,7 +18,7 @@ describe("renderEvent", () => {
   it("renders an all-day VEVENT with DTEND = next day", () => {
     const ics = renderEvent(row(), "Personal");
     expect(ics).toContain("BEGIN:VEVENT");
-    expect(ics).toContain("UID:01900000-0000-7000-8000-000000000001@obsidian-ical");
+    expect(ics).toContain("UID:01900000-0000-7000-8000-000000000001@obsidian-caldav");
     expect(ics).toContain("SUMMARY:Ship feature");
     expect(ics).toContain("DTSTART;VALUE=DATE:20260515");
     expect(ics).toContain("DTEND;VALUE=DATE:20260516");

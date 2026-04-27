@@ -17,11 +17,12 @@ export interface ReconcileResult {
 
 export interface ReconcileOptions {
   vaultName: string;
+  calendarId: string;
 }
 
 /**
- * Diff the scanner's view of the vault against the DB and apply changes.
- * Returns the actions taken so the caller can log / surface them.
+ * Diff the scanner's view of one calendar's folder against the DB rows for
+ * that calendar and apply changes. Other calendars' rows are untouched.
  */
 export function reconcile(
   store: Store,
@@ -32,7 +33,7 @@ export function reconcile(
   const byPath = new Map<string, ScannedFile>();
   for (const f of scanned) byPath.set(f.vaultPath, f);
 
-  const existing = store.getAllLiveEvents();
+  const existing = store.getAllLiveEvents(opts.calendarId);
   const existingByPath = new Map<string, EventRow>();
   for (const e of existing) existingByPath.set(e.vault_path, e);
 
@@ -46,6 +47,7 @@ export function reconcile(
         const etag = computeEtag(prev.uid, file.vaultPath, file.dateValue, opts.vaultName);
         const next: EventRow = {
           uid: prev.uid,
+          calendar_id: opts.calendarId,
           vault_path: file.vaultPath,
           date_value: file.dateValue,
           etag,
@@ -67,6 +69,7 @@ export function reconcile(
       const etag = computeEtag(uid, file.vaultPath, file.dateValue, opts.vaultName);
       const row: EventRow = {
         uid,
+        calendar_id: opts.calendarId,
         vault_path: file.vaultPath,
         date_value: file.dateValue,
         etag,
@@ -126,35 +129,52 @@ export function reconcile(
       case "insert":
         store.upsertEvent({
           uid: a.row.uid,
+          calendar_id: opts.calendarId,
           vault_path: a.row.vault_path,
           date_value: a.row.date_value,
           etag: a.row.etag,
         });
-        logger.info({ uid: a.row.uid, path: a.row.vault_path }, "event inserted");
+        logger.info(
+          { uid: a.row.uid, calendarId: opts.calendarId, path: a.row.vault_path },
+          "event inserted",
+        );
         break;
       case "update":
         // already written above
         logger.info(
-          { uid: a.row.uid, path: a.row.vault_path, date: a.row.date_value },
+          {
+            uid: a.row.uid,
+            calendarId: opts.calendarId,
+            path: a.row.vault_path,
+            date: a.row.date_value,
+          },
           "event updated",
         );
         break;
       case "rename":
         store.renamePath(a.row.uid, a.row.vault_path);
         logger.info(
-          { uid: a.row.uid, from: a.previousPath, to: a.row.vault_path },
+          {
+            uid: a.row.uid,
+            calendarId: opts.calendarId,
+            from: a.previousPath,
+            to: a.row.vault_path,
+          },
           "event renamed",
         );
         break;
       case "delete":
         store.tombstone(a.uid);
-        logger.info({ uid: a.uid, path: a.vaultPath }, "event tombstoned");
+        logger.info(
+          { uid: a.uid, calendarId: opts.calendarId, path: a.vaultPath },
+          "event tombstoned",
+        );
         break;
     }
   }
 
   if (actions.length > 0) {
-    store.bumpCtag();
+    store.bumpCtag(opts.calendarId);
     return { actions, ctagBumped: true };
   }
   return { actions, ctagBumped: false };
@@ -176,6 +196,7 @@ export function computeEtag(
   // Render the event and hash the canonical body. Any field change → new ETag.
   const ics = renderEvent({
     uid,
+    calendar_id: "",
     vault_path: vaultPath,
     date_value: dateValue,
     etag: "",

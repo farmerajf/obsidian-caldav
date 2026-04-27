@@ -2,7 +2,7 @@ import type { EventRow } from "../db.js";
 import { isAllDay } from "../vault/scanner.js";
 
 const CRLF = "\r\n";
-const PRODID = "-//obsidian-ical//EN";
+const PRODID = "-//obsidian-caldav//EN";
 
 export interface ParsedEvent {
   uid: string;
@@ -91,7 +91,7 @@ export function renderEvent(row: EventRow, vaultName: string): string {
     `PRODID:${PRODID}`,
     "CALSCALE:GREGORIAN",
     "BEGIN:VEVENT",
-    `UID:${row.uid}@obsidian-ical`,
+    `UID:${row.uid}@obsidian-caldav`,
     `DTSTAMP:${stableDtstamp}`,
     `SUMMARY:${escapeText(summary)}`,
   ];
@@ -186,8 +186,8 @@ export function parseEvent(body: string): ParsedEvent {
     if (!inEvent) continue;
     switch (line.name) {
       case "UID": {
-        // Strip "@obsidian-ical" suffix if present so we can look up by raw UID.
-        const v = line.value.replace(/@obsidian-ical$/, "");
+        // Strip "@obsidian-caldav" suffix if present so we can look up by raw UID.
+        const v = line.value.replace(/@obsidian-caldav$/, "");
         uid = v;
         break;
       }

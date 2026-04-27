@@ -1,8 +1,8 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
-import type { HandlerContext } from "./handlers.js";
+import { resolveRoute, type HandlerContext } from "./handlers.js";
 import type { VaultWriter } from "../vault/writer.js";
 import type { Logger } from "../logger.js";
-import { parseEvent, renderEvent } from "./ics.js";
+import { parseEvent } from "./ics.js";
 import { computeEtag } from "../sync/reconciler.js";
 
 export async function handlePut(
@@ -12,13 +12,12 @@ export async function handlePut(
   writer: VaultWriter,
   logger: Logger,
 ): Promise<void> {
-  const url = req.url.split("?")[0]!;
-  const m = /^\/calendars\/[^/]+\/tasks\/([^/]+)\.ics$/.exec(url);
-  if (!m) {
+  const route = resolveRoute(req.url, ctx);
+  if (route.kind !== "event") {
     reply.code(404).send();
     return;
   }
-  const uidFromPath = decodeURIComponent(m[1]!);
+  const cal = ctx.calendarsById.get(route.calendarId)!;
   const body = typeof req.body === "string" ? req.body : "";
   const parsed = parseEvent(body);
 
@@ -26,9 +25,12 @@ export async function handlePut(
   // events created from the calendar UI (which we don't currently support),
   // the UID would not be in our store. We treat unknown UIDs as 404 — the
   // user creates events by adding files in Obsidian, not the other way.
-  const ev = ctx.store.getEventByUid(uidFromPath);
-  if (!ev || ev.tombstoned) {
-    logger.warn({ uid: uidFromPath, url }, "PUT for unknown event");
+  const ev = ctx.store.getEventByUid(route.uid);
+  if (!ev || ev.tombstoned || ev.calendar_id !== cal.id) {
+    logger.warn(
+      { uid: route.uid, calendarId: cal.id, url: req.url },
+      "PUT for unknown event",
+    );
     reply.code(404).send();
     return;
   }
@@ -41,7 +43,11 @@ export async function handlePut(
   // 1) Handle title change → rename file
   if (newSummary && newSummary !== basenameNoExt(vaultPath)) {
     try {
-      const renamed = await writer.renameToTitle(vaultPath, newSummary);
+      const renamed = await writer.renameToTitle(
+        cal.resolvedVaultPath,
+        vaultPath,
+        newSummary,
+      );
       if (renamed) {
         vaultPath = renamed;
         ctx.store.renamePath(ev.uid, vaultPath);
@@ -56,7 +62,12 @@ export async function handlePut(
   // 2) Handle date change → update frontmatter
   if (newDate !== ev.date_value) {
     try {
-      await writer.setDateProperty(vaultPath, newDate);
+      await writer.setDateProperty(
+        cal.resolvedVaultPath,
+        vaultPath,
+        cal.property,
+        newDate,
+      );
     } catch (err) {
       logger.error({ err, vaultPath, newDate }, "frontmatter write failed");
       reply.code(500).send();
@@ -65,20 +76,15 @@ export async function handlePut(
   }
 
   // 3) Update DB row to reflect what we just wrote
-  const etag = computeEtag(ev.uid, vaultPath, newDate, ctx.vaultName);
+  const etag = computeEtag(ev.uid, vaultPath, newDate, cal.vault_name);
   ctx.store.upsertEvent({
     uid: ev.uid,
+    calendar_id: cal.id,
     vault_path: vaultPath,
     date_value: newDate,
     etag,
   });
-  ctx.store.bumpCtag();
-
-  // Render and return ETag — Apple Calendar uses this to know the body it
-  // sent matched what we stored.
-  const finalEv = ctx.store.getEventByUid(ev.uid)!;
-  const rendered = renderEvent(finalEv, ctx.vaultName);
-  void rendered;
+  ctx.store.bumpCtag(cal.id);
 
   reply.header("ETag", etag).code(204).send();
 }
