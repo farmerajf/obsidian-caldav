@@ -12,6 +12,7 @@ import {
 } from "./handlers.js";
 import { handlePut } from "./put.js";
 import { handleDelete } from "./delete.js";
+import { handleProppatch } from "./proppatch.js";
 import type { VaultWriter } from "../vault/writer.js";
 
 export interface ServerOptions {
@@ -50,6 +51,7 @@ export async function buildServer(opts: ServerOptions): Promise<FastifyInstance>
 
   // Fastify only knows standard HTTP methods by default; CalDAV needs these.
   app.addHttpMethod("PROPFIND", { hasBody: true });
+  app.addHttpMethod("PROPPATCH", { hasBody: true });
   app.addHttpMethod("REPORT", { hasBody: true });
 
   // Treat all DAV bodies as raw text — fast-xml-parser handles parsing later.
@@ -93,7 +95,7 @@ export async function buildServer(opts: ServerOptions): Promise<FastifyInstance>
   // Single catch-all route across all methods we accept. Registering HEAD
   // separately conflicts with Fastify's auto-HEAD-from-GET, so omit it.
   app.route({
-    method: ["PROPFIND", "REPORT", "OPTIONS", "GET", "PUT", "DELETE"] as never,
+    method: ["PROPFIND", "PROPPATCH", "REPORT", "OPTIONS", "GET", "PUT", "DELETE"] as never,
     url: "/*",
     handler: async (req, reply) => {
       switch (req.method) {
@@ -101,6 +103,8 @@ export async function buildServer(opts: ServerOptions): Promise<FastifyInstance>
           return handleOptions(req, reply);
         case "PROPFIND":
           return handlePropfind(req, reply, ctx);
+        case "PROPPATCH":
+          return handleProppatch(req, reply, ctx, opts.logger);
         case "REPORT":
           return handleReport(req, reply, ctx);
         case "GET":

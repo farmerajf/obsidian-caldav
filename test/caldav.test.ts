@@ -492,6 +492,108 @@ describe("CalDAV server (multiple calendars, one vault)", () => {
     expect(res.body).toContain("#FF0000");
     expect(res.body).not.toContain("#00FF00");
   });
+
+  it("PROPPATCH persists calendar-color and PROPFIND returns the override", async () => {
+    const patch = await h.app.inject({
+      method: "PROPPATCH" as never,
+      url: `/calendars/${USER}/tasks/`,
+      headers: { authorization: AUTH, "content-type": "application/xml" },
+      payload: `<?xml version="1.0"?>
+        <d:propertyupdate xmlns:d="DAV:" xmlns:ical="http://apple.com/ns/ical/">
+          <d:set><d:prop><ical:calendar-color>#123456FF</ical:calendar-color></d:prop></d:set>
+        </d:propertyupdate>`,
+    });
+    expect(patch.statusCode).toBe(207);
+    expect(patch.body).toContain("200 OK");
+
+    const get = await h.app.inject({
+      method: "PROPFIND" as never,
+      url: `/calendars/${USER}/tasks/`,
+      headers: { authorization: AUTH, depth: "0", "content-type": "application/xml" },
+      payload: `<?xml version="1.0"?>
+        <d:propfind xmlns:d="DAV:" xmlns:ical="http://apple.com/ns/ical/">
+          <d:prop><ical:calendar-color/></d:prop>
+        </d:propfind>`,
+    });
+    expect(get.body).toContain("#123456FF");
+    // Original config color is no longer returned.
+    expect(get.body).not.toContain(">#FF0000<");
+  });
+
+  it("PROPPATCH persists displayname", async () => {
+    await h.app.inject({
+      method: "PROPPATCH" as never,
+      url: `/calendars/${USER}/tasks/`,
+      headers: { authorization: AUTH, "content-type": "application/xml" },
+      payload: `<?xml version="1.0"?>
+        <d:propertyupdate xmlns:d="DAV:">
+          <d:set><d:prop><d:displayname>Renamed By Apple</d:displayname></d:prop></d:set>
+        </d:propertyupdate>`,
+    });
+    const res = await h.app.inject({
+      method: "PROPFIND" as never,
+      url: `/calendars/${USER}/tasks/`,
+      headers: { authorization: AUTH, depth: "0", "content-type": "application/xml" },
+      payload: `<d:propfind xmlns:d="DAV:"><d:prop><d:displayname/></d:prop></d:propfind>`,
+    });
+    expect(res.body).toContain(">Renamed By Apple<");
+  });
+
+  it("PROPPATCH remove clears the override and falls back to config", async () => {
+    // First set an override.
+    await h.app.inject({
+      method: "PROPPATCH" as never,
+      url: `/calendars/${USER}/tasks/`,
+      headers: { authorization: AUTH, "content-type": "application/xml" },
+      payload: `<d:propertyupdate xmlns:d="DAV:" xmlns:ical="http://apple.com/ns/ical/">
+        <d:set><d:prop><ical:calendar-color>#ABCDEFFF</ical:calendar-color></d:prop></d:set>
+      </d:propertyupdate>`,
+    });
+    // Then remove it.
+    await h.app.inject({
+      method: "PROPPATCH" as never,
+      url: `/calendars/${USER}/tasks/`,
+      headers: { authorization: AUTH, "content-type": "application/xml" },
+      payload: `<d:propertyupdate xmlns:d="DAV:" xmlns:ical="http://apple.com/ns/ical/">
+        <d:remove><d:prop><ical:calendar-color/></d:prop></d:remove>
+      </d:propertyupdate>`,
+    });
+    const res = await h.app.inject({
+      method: "PROPFIND" as never,
+      url: `/calendars/${USER}/tasks/`,
+      headers: { authorization: AUTH, depth: "0", "content-type": "application/xml" },
+      payload: `<d:propfind xmlns:d="DAV:" xmlns:ical="http://apple.com/ns/ical/">
+        <d:prop><ical:calendar-color/></d:prop>
+      </d:propfind>`,
+    });
+    expect(res.body).toContain("#FF0000"); // back to the config-defined color
+  });
+
+  it("PROPPATCH on a non-writable property returns 403 in propstat", async () => {
+    const res = await h.app.inject({
+      method: "PROPPATCH" as never,
+      url: `/calendars/${USER}/tasks/`,
+      headers: { authorization: AUTH, "content-type": "application/xml" },
+      payload: `<d:propertyupdate xmlns:d="DAV:">
+        <d:set><d:prop><d:resourcetype>nope</d:resourcetype></d:prop></d:set>
+      </d:propertyupdate>`,
+    });
+    expect(res.statusCode).toBe(207);
+    expect(res.body).toContain("403 Forbidden");
+  });
+
+  it("rejects bogus calendar-color values with 422", async () => {
+    const res = await h.app.inject({
+      method: "PROPPATCH" as never,
+      url: `/calendars/${USER}/tasks/`,
+      headers: { authorization: AUTH, "content-type": "application/xml" },
+      payload: `<d:propertyupdate xmlns:d="DAV:" xmlns:ical="http://apple.com/ns/ical/">
+        <d:set><d:prop><ical:calendar-color>not-a-color</ical:calendar-color></d:prop></d:set>
+      </d:propertyupdate>`,
+    });
+    expect(res.statusCode).toBe(207);
+    expect(res.body).toContain("422 Unprocessable Entity");
+  });
 });
 
 describe("CalDAV server (calendars in different vaults)", () => {

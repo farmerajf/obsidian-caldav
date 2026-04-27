@@ -17,7 +17,7 @@ export interface PendingWrite {
   expected_mtime_ms: number;
 }
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -45,6 +45,13 @@ CREATE TABLE IF NOT EXISTS collection (
 CREATE TABLE IF NOT EXISTS pending_writes (
   abs_path          TEXT PRIMARY KEY,
   expected_mtime_ms INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS calendar_props (
+  calendar_id TEXT NOT NULL,
+  prop_name   TEXT NOT NULL,
+  prop_value  TEXT NOT NULL,
+  PRIMARY KEY (calendar_id, prop_name)
 );
 `;
 
@@ -96,6 +103,7 @@ export class Store {
 
     if (current < 1) this.upgradeToV1();
     if (current < 2) this.upgradeToV2();
+    if (current < 3) this.upgradeToV3();
 
     // Make sure schema_version reflects the final version (covers the case
     // where we just created it during upgradeToV1).
@@ -159,6 +167,22 @@ export class Store {
       `);
     });
     tx();
+  }
+
+  /**
+   * v2 → v3: per-calendar property overrides. Lets clients (Apple Calendar)
+   * persist their own calendar-color, displayname, etc. via PROPPATCH so
+   * those don't get clobbered by config defaults on every PROPFIND.
+   */
+  private upgradeToV3(): void {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS calendar_props (
+        calendar_id TEXT NOT NULL,
+        prop_name   TEXT NOT NULL,
+        prop_value  TEXT NOT NULL,
+        PRIMARY KEY (calendar_id, prop_name)
+      );
+    `);
   }
 
   /** Ensure a ctag row exists for each known calendar id. Idempotent. */
@@ -239,6 +263,34 @@ export class Store {
 
   hardDelete(uid: string): void {
     this.db.prepare("DELETE FROM events WHERE uid = ?").run(uid);
+  }
+
+  // --- per-calendar property overrides (PROPPATCH state) ---
+  getCalendarProp(calendarId: string, propName: string): string | undefined {
+    const row = this.db
+      .prepare(
+        "SELECT prop_value FROM calendar_props WHERE calendar_id = ? AND prop_name = ?",
+      )
+      .get(calendarId, propName) as { prop_value: string } | undefined;
+    return row?.prop_value;
+  }
+
+  setCalendarProp(calendarId: string, propName: string, value: string): void {
+    this.db
+      .prepare(
+        `INSERT INTO calendar_props (calendar_id, prop_name, prop_value)
+         VALUES (?, ?, ?)
+         ON CONFLICT(calendar_id, prop_name) DO UPDATE SET prop_value = excluded.prop_value`,
+      )
+      .run(calendarId, propName, value);
+  }
+
+  deleteCalendarProp(calendarId: string, propName: string): void {
+    this.db
+      .prepare(
+        "DELETE FROM calendar_props WHERE calendar_id = ? AND prop_name = ?",
+      )
+      .run(calendarId, propName);
   }
 
   // --- pending writes (loop suppression) ---

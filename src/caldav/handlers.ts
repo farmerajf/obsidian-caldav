@@ -20,7 +20,7 @@ export interface HandlerContext {
   basePath: string;
 }
 
-const ALLOWED_METHODS = "OPTIONS, GET, HEAD, PUT, DELETE, PROPFIND, REPORT";
+const ALLOWED_METHODS = "OPTIONS, GET, HEAD, PUT, DELETE, PROPFIND, PROPPATCH, REPORT";
 const DEFAULT_COLOR = "#7C3AED";
 
 export function handleOptions(_req: FastifyRequest, reply: FastifyReply): void {
@@ -187,6 +187,9 @@ function calendarProps(
   requested: string[],
 ): Record<string, string | undefined> {
   const ctag = ctx.store.getCtag(cal.id);
+  // Stored override (set by client via PROPPATCH) > config value > default.
+  const stored = (name: string): string | undefined =>
+    ctx.store.getCalendarProp(cal.id, name);
   const out: Record<string, string | undefined> = {};
   for (const name of requested) {
     switch (name) {
@@ -194,11 +197,13 @@ function calendarProps(
         out[name] = `<d:collection/><c:calendar/>`;
         break;
       case "displayname":
-        out[name] = escapeXml(cal.name);
+        out[name] = escapeXml(stored("displayname") ?? cal.name);
         break;
       case "calendar-description":
         out[name] = escapeXml(
-          cal.description ?? `Tasks from ${cal.folder} (${cal.property})`,
+          stored("calendar-description") ??
+            cal.description ??
+            `Tasks from ${cal.folder} (${cal.property})`,
         );
         break;
       case "supported-calendar-component-set":
@@ -208,8 +213,13 @@ function calendarProps(
         out[name] = escapeXml(ctag);
         break;
       case "calendar-color":
-        out[name] = escapeXml(cal.color ?? DEFAULT_COLOR);
+        out[name] = escapeXml(stored("calendar-color") ?? cal.color ?? DEFAULT_COLOR);
         break;
+      case "calendar-order": {
+        const order = stored("calendar-order");
+        out[name] = order !== undefined ? escapeXml(order) : undefined;
+        break;
+      }
       case "current-user-principal":
         out[name] = `<d:href>${principalPath(ctx)}</d:href>`;
         break;
