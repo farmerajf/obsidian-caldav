@@ -43,14 +43,17 @@ export function reconcile(
   for (const file of scanned) {
     const prev = existingByPath.get(file.vaultPath);
     if (prev) {
-      if (prev.date_value !== file.dateValue) {
-        const etag = computeEtag(prev.uid, file.vaultPath, file.dateValue, opts.vaultName);
+      // Compare ETags (= content hash of the rendered body). This catches
+      // date changes AND render-format upgrades — bumping the server with
+      // a new ICS layout will refresh stale ETags so clients refetch.
+      const newEtag = computeEtag(prev.uid, file.vaultPath, file.dateValue, opts.vaultName);
+      if (prev.etag !== newEtag) {
         const next: EventRow = {
           uid: prev.uid,
           calendar_id: opts.calendarId,
           vault_path: file.vaultPath,
           date_value: file.dateValue,
-          etag,
+          etag: newEtag,
           tombstoned: 0,
           updated_at: Date.now(),
         };
