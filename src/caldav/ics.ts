@@ -103,7 +103,6 @@ export function renderEvent(row: EventRow, vaultName: string): string {
     lines.push(`DTEND:${plusOneHour(dtstart.value)}`);
   }
   lines.push(`URL:${url}`);
-  lines.push(`DESCRIPTION:${escapeText(`Open in Obsidian: ${url}`)}`);
   lines.push("END:VEVENT");
   lines.push("END:VCALENDAR");
   return lines.join(CRLF) + CRLF;
