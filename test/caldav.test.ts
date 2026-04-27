@@ -742,3 +742,157 @@ describe("CalDAV server (with base_path)", () => {
     expect(res.body).toContain("BEGIN:VEVENT");
   });
 });
+
+async function setupWithStatusIcons(): Promise<Harness> {
+  const vault = mkdtempSync(join(tmpdir(), "caldav-e2e-status-"));
+  const stateDir = mkdtempSync(join(tmpdir(), "caldav-e2e-status-state-"));
+  writeFileSync(
+    join(vault, "open-task.md"),
+    `---\ndue: 2026-05-15\nStatus: 'In progress'\n---\n`,
+  );
+  writeFileSync(
+    join(vault, "done-task.md"),
+    `---\ndue: 2026-05-16\nStatus: Complete\n---\n`,
+  );
+  writeFileSync(
+    join(vault, "no-status.md"),
+    `---\ndue: 2026-05-17\n---\n`,
+  );
+
+  const calendars: ResolvedCalendar[] = [
+    {
+      id: "tasks",
+      name: "Tasks",
+      vault_path: vault,
+      vault_name: "Status",
+      folder: "",
+      property: "due",
+      status_property: "Status",
+      status_icons: { "Not started": "◎", "In progress": "◎", Complete: "◉" },
+      resolvedVaultPath: vault,
+      resolvedFolderAbs: vault,
+    },
+  ];
+
+  const store = new Store(stateDir);
+  store.ensureCalendars(calendars.map((c) => c.id));
+  const writer = new VaultWriter({ store, logger });
+  const scanned = await scanVault({
+    vaultRoot: vault,
+    scanRoot: vault,
+    property: "due",
+    statusProperty: "Status",
+    logger,
+  });
+  reconcile(
+    store,
+    scanned,
+    {
+      vaultName: "Status",
+      calendarId: "tasks",
+      statusIcons: calendars[0]!.status_icons,
+    },
+    logger,
+  );
+
+  const app = await buildServer({
+    host: "127.0.0.1",
+    port: 0,
+    username: USER,
+    password: PASS,
+    store,
+    calendars,
+    writer,
+    logger,
+    basePath: "",
+  });
+  return { app, store, vaults: [vault], calendars };
+}
+
+describe("CalDAV server (status icons)", () => {
+  let h: Harness;
+  beforeEach(async () => {
+    h = await setupWithStatusIcons();
+  });
+  afterEach(async () => {
+    await h.app.close();
+    h.store.db.close();
+  });
+
+  it("prepends ◎ to in-progress events and ◉ to complete events", async () => {
+    const events = h.store.getAllLiveEvents("tasks");
+    const open = events.find((e) => e.vault_path === "open-task.md")!;
+    const done = events.find((e) => e.vault_path === "done-task.md")!;
+
+    const openRes = await h.app.inject({
+      method: "GET",
+      url: `/calendars/${USER}/tasks/${encodeURIComponent(open.uid)}.ics`,
+      headers: { authorization: AUTH },
+    });
+    expect(openRes.body).toMatch(/SUMMARY:◎ ​open-task/);
+
+    const doneRes = await h.app.inject({
+      method: "GET",
+      url: `/calendars/${USER}/tasks/${encodeURIComponent(done.uid)}.ics`,
+      headers: { authorization: AUTH },
+    });
+    expect(doneRes.body).toMatch(/SUMMARY:◉ ​done-task/);
+  });
+
+  it("leaves SUMMARY untouched when no status property is set on the file", async () => {
+    const ev = h.store.getAllLiveEvents("tasks").find((e) => e.vault_path === "no-status.md")!;
+    const res = await h.app.inject({
+      method: "GET",
+      url: `/calendars/${USER}/tasks/${encodeURIComponent(ev.uid)}.ics`,
+      headers: { authorization: AUTH },
+    });
+    expect(res.body).toMatch(/SUMMARY:no-status/);
+    expect(res.body).not.toContain("​");
+  });
+
+  it("PUT with the icon-prefixed SUMMARY does not put the icon in the filename", async () => {
+    const ev = h.store.getAllLiveEvents("tasks").find((e) => e.vault_path === "open-task.md")!;
+    // Apple Calendar would send back what we rendered, plus the user's edit.
+    const newBody = [
+      "BEGIN:VCALENDAR",
+      "BEGIN:VEVENT",
+      `UID:${ev.uid}@obsidian-caldav`,
+      "SUMMARY:◎ ​renamed-task",
+      "DTSTART;VALUE=DATE:20260515",
+      "END:VEVENT",
+      "END:VCALENDAR",
+    ].join("\r\n");
+    const res = await h.app.inject({
+      method: "PUT",
+      url: `/calendars/${USER}/tasks/${encodeURIComponent(ev.uid)}.ics`,
+      headers: { authorization: AUTH, "content-type": "text/calendar" },
+      payload: newBody,
+    });
+    expect(res.statusCode).toBe(204);
+    expect(h.store.getEventByUid(ev.uid)?.vault_path).toBe("renamed-task.md");
+  });
+
+  it("PUT with a SUMMARY that contains a stale icon (from cached client) is still stripped", async () => {
+    const ev = h.store.getAllLiveEvents("tasks").find((e) => e.vault_path === "open-task.md")!;
+    // User configured ◎ → ⏺ later; client still has SUMMARY rendered with ◎.
+    // The hidden ZWSP marker is what we use to identify the prefix region,
+    // so we strip correctly even though ◎ is no longer in the icon map.
+    const newBody = [
+      "BEGIN:VCALENDAR",
+      "BEGIN:VEVENT",
+      `UID:${ev.uid}@obsidian-caldav`,
+      "SUMMARY:⏺ ​stale-icon-task",
+      "DTSTART;VALUE=DATE:20260515",
+      "END:VEVENT",
+      "END:VCALENDAR",
+    ].join("\r\n");
+    const res = await h.app.inject({
+      method: "PUT",
+      url: `/calendars/${USER}/tasks/${encodeURIComponent(ev.uid)}.ics`,
+      headers: { authorization: AUTH, "content-type": "text/calendar" },
+      payload: newBody,
+    });
+    expect(res.statusCode).toBe(204);
+    expect(h.store.getEventByUid(ev.uid)?.vault_path).toBe("stale-icon-task.md");
+  });
+});

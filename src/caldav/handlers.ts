@@ -10,6 +10,12 @@ import {
   type PropResponse,
 } from "./xml.js";
 import { renderEvent } from "./ics.js";
+import { resolveStatusIcon } from "../status.js";
+import type { EventRow } from "../db.js";
+
+function iconFor(ev: EventRow, cal: ResolvedCalendar): string | undefined {
+  return resolveStatusIcon(ev.status_value, cal.status_icons);
+}
 
 export interface HandlerContext {
   store: Store;
@@ -327,7 +333,7 @@ export async function handlePropfind(
       });
       if (depth !== "0") {
         for (const ev of ctx.store.getAllLiveEvents(cal.id)) {
-          const renderedBody = renderEvent(ev, cal.vault_name);
+          const renderedBody = renderEvent(ev, cal.vault_name, iconFor(ev, cal));
           responses.push({
             href: eventPath(ctx, cal.id, ev.uid),
             props: eventProps(ev.etag, renderedBody, requested, false),
@@ -343,7 +349,7 @@ export async function handlePropfind(
         return;
       }
       const cal = ctx.calendarsById.get(route.calendarId)!;
-      const renderedBody = renderEvent(ev, cal.vault_name);
+      const renderedBody = renderEvent(ev, cal.vault_name, iconFor(ev, cal));
       responses.push({
         href: eventPath(ctx, route.calendarId, ev.uid),
         props: eventProps(ev.etag, renderedBody, requested, false),
@@ -410,7 +416,7 @@ export async function handleReport(
       const uid = decodeURIComponent(m[2]!);
       const ev = ctx.store.getEventByUid(uid);
       if (!ev || ev.tombstoned || ev.calendar_id !== cal.id) continue;
-      const renderedBody = renderEvent(ev, cal.vault_name);
+      const renderedBody = renderEvent(ev, cal.vault_name, iconFor(ev, cal));
       responses.push({
         href,
         props: eventProps(ev.etag, renderedBody, requested, true),
@@ -418,7 +424,7 @@ export async function handleReport(
     }
   } else {
     for (const ev of ctx.store.getAllLiveEvents(cal.id)) {
-      const renderedBody = renderEvent(ev, cal.vault_name);
+      const renderedBody = renderEvent(ev, cal.vault_name, iconFor(ev, cal));
       responses.push({
         href: eventPath(ctx, cal.id, ev.uid),
         props: eventProps(ev.etag, renderedBody, requested, true),
@@ -449,7 +455,7 @@ export async function handleGet(
     return;
   }
   const cal = ctx.calendarsById.get(route.calendarId)!;
-  const body = renderEvent(ev, cal.vault_name);
+  const body = renderEvent(ev, cal.vault_name, iconFor(ev, cal));
   reply
     .header("ETag", ev.etag)
     .header("Content-Type", "text/calendar; charset=utf-8")

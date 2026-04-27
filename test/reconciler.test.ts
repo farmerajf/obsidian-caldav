@@ -16,8 +16,14 @@ function makeStore(): Store {
   return store;
 }
 
-function file(p: string, date: string): ScannedFile {
-  return { vaultPath: p, absPath: `/abs/${p}`, dateValue: date, mtimeMs: Date.now() };
+function file(p: string, date: string, statusValue: string | null = null): ScannedFile {
+  return {
+    vaultPath: p,
+    absPath: `/abs/${p}`,
+    dateValue: date,
+    statusValue,
+    mtimeMs: Date.now(),
+  };
 }
 
 describe("reconcile", () => {
@@ -101,6 +107,25 @@ describe("reconcile", () => {
     expect(r.actions).toHaveLength(1);
     expect(r.actions[0]!.type).toBe("delete");
     expect(store.getAllLiveEvents(CAL)).toHaveLength(1);
+  });
+
+  it("status change without date change still triggers an update", () => {
+    const icons = { "Not started": "◎", Complete: "◉" };
+    reconcile(
+      store,
+      [file("a.md", "2026-05-01", "Not started")],
+      { vaultName: "V", calendarId: CAL, statusIcons: icons },
+      logger,
+    );
+    const r = reconcile(
+      store,
+      [file("a.md", "2026-05-01", "Complete")],
+      { vaultName: "V", calendarId: CAL, statusIcons: icons },
+      logger,
+    );
+    expect(r.actions).toHaveLength(1);
+    expect(r.actions[0]!.type).toBe("update");
+    expect(store.getEventByPath(CAL, "a.md")?.status_value).toBe("Complete");
   });
 
   it("scopes its diff to the given calendar (other calendars untouched)", () => {

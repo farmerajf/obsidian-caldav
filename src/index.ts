@@ -72,6 +72,8 @@ async function main(): Promise<void> {
       vaultRoot: cal.resolvedVaultPath,
       scanRoot: cal.resolvedFolderAbs,
       property: cal.property,
+      statusProperty: cal.status_property,
+      statusIcons: cal.status_icons,
       calendarId: cal.id,
       vaultName: cal.vault_name,
       store,

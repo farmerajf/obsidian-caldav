@@ -3,6 +3,7 @@ import type { Store, EventRow } from "../db.js";
 import type { ScannedFile } from "../vault/scanner.js";
 import { renderEvent } from "../caldav/ics.js";
 import type { Logger } from "../logger.js";
+import { resolveStatusIcon } from "../status.js";
 
 export type ReconcileAction =
   | { type: "insert"; row: EventRow }
@@ -18,6 +19,8 @@ export interface ReconcileResult {
 export interface ReconcileOptions {
   vaultName: string;
   calendarId: string;
+  /** Optional status-value → icon map for this calendar. */
+  statusIcons?: Record<string, string>;
 }
 
 /**
@@ -42,17 +45,26 @@ export function reconcile(
   // --- inserts and updates ---
   for (const file of scanned) {
     const prev = existingByPath.get(file.vaultPath);
+    const icon = resolveStatusIcon(file.statusValue, opts.statusIcons);
     if (prev) {
       // Compare ETags (= content hash of the rendered body). This catches
-      // date changes AND render-format upgrades — bumping the server with
-      // a new ICS layout will refresh stale ETags so clients refetch.
-      const newEtag = computeEtag(prev.uid, file.vaultPath, file.dateValue, opts.vaultName);
-      if (prev.etag !== newEtag) {
+      // date changes, status changes, AND render-format upgrades — bumping
+      // the server with a new ICS layout will refresh stale ETags so clients
+      // refetch.
+      const newEtag = computeEtag(
+        prev.uid,
+        file.vaultPath,
+        file.dateValue,
+        opts.vaultName,
+        icon,
+      );
+      if (prev.etag !== newEtag || prev.status_value !== file.statusValue) {
         const next: EventRow = {
           uid: prev.uid,
           calendar_id: opts.calendarId,
           vault_path: file.vaultPath,
           date_value: file.dateValue,
+          status_value: file.statusValue,
           etag: newEtag,
           tombstoned: 0,
           updated_at: Date.now(),
@@ -69,12 +81,19 @@ export function reconcile(
       // renames by UID-less reasoning. (Renames that change *only* the path
       // appear here as insert+delete pairs; we collapse them next.)
       const uid = uuidv7();
-      const etag = computeEtag(uid, file.vaultPath, file.dateValue, opts.vaultName);
+      const etag = computeEtag(
+        uid,
+        file.vaultPath,
+        file.dateValue,
+        opts.vaultName,
+        icon,
+      );
       const row: EventRow = {
         uid,
         calendar_id: opts.calendarId,
         vault_path: file.vaultPath,
         date_value: file.dateValue,
+        status_value: file.statusValue,
         etag,
         tombstoned: 0,
         updated_at: Date.now(),
@@ -111,6 +130,7 @@ export function reconcile(
       const renamed: EventRow = {
         ...del,
         vault_path: ins.row.vault_path,
+        status_value: ins.row.status_value,
         updated_at: Date.now(),
       };
       actions[matchIdx] = {
@@ -135,6 +155,7 @@ export function reconcile(
           calendar_id: opts.calendarId,
           vault_path: a.row.vault_path,
           date_value: a.row.date_value,
+          status_value: a.row.status_value,
           etag: a.row.etag,
         });
         logger.info(
@@ -150,6 +171,7 @@ export function reconcile(
             calendarId: opts.calendarId,
             path: a.row.vault_path,
             date: a.row.date_value,
+            status: a.row.status_value,
           },
           "event updated",
         );
@@ -195,6 +217,7 @@ export function computeEtag(
   vaultPath: string,
   dateValue: string,
   vaultName: string,
+  statusIcon?: string,
 ): string {
   // Render the event and hash the canonical body. Any field change → new ETag.
   const ics = renderEvent({
@@ -202,10 +225,11 @@ export function computeEtag(
     calendar_id: "",
     vault_path: vaultPath,
     date_value: dateValue,
+    status_value: null,
     etag: "",
     tombstoned: 0,
     updated_at: 0,
-  }, vaultName);
+  }, vaultName, statusIcon);
   return `"${djb2(ics).toString(36)}"`;
 }
 

@@ -9,6 +9,10 @@ export interface WatcherOptions {
   vaultRoot: string;
   scanRoot: string;
   property: string;
+  /** Optional frontmatter key to also read for the SUMMARY status icon. */
+  statusProperty?: string;
+  /** Optional status-value → icon map; passed through to reconcile. */
+  statusIcons?: Record<string, string>;
   calendarId: string;
   vaultName: string;
   store: Store;
@@ -86,12 +90,17 @@ export class VaultWatcher {
       vaultRoot: this.opts.vaultRoot,
       scanRoot: this.opts.scanRoot,
       property: this.opts.property,
+      statusProperty: this.opts.statusProperty,
       logger: this.opts.logger,
     });
     const result = reconcile(
       this.opts.store,
       scanned,
-      { vaultName: this.opts.vaultName, calendarId: this.opts.calendarId },
+      {
+        vaultName: this.opts.vaultName,
+        calendarId: this.opts.calendarId,
+        statusIcons: this.opts.statusIcons,
+      },
       this.opts.logger,
     );
     this.opts.logger.info(

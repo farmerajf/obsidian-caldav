@@ -4,6 +4,15 @@ import { isAllDay } from "../vault/scanner.js";
 const CRLF = "\r\n";
 const PRODID = "-//obsidian-caldav//EN";
 
+/**
+ * Zero-width space inserted between the status icon and the filename in the
+ * rendered SUMMARY. On the way back in (PUT), we slice off everything up to
+ * and including the SEP to recover the bare filename — so the icon prefix
+ * never leaks into the .md filename even if the user later changes the
+ * configured icon. The user almost certainly won't type a U+200B themselves.
+ */
+const SEP = "​";
+
 export interface ParsedEvent {
   uid: string;
   summary: string | null;
@@ -69,6 +78,18 @@ function plusOneHour(stamp: string): string {
   return `${dt.getFullYear()}${pad(dt.getMonth() + 1)}${pad(dt.getDate())}T${pad(dt.getHours())}${pad(dt.getMinutes())}${pad(dt.getSeconds())}`;
 }
 
+/**
+ * Strip a leading icon-prefix from a SUMMARY received via PUT. We rendered
+ * `<icon> <SEP><name>` outbound; if SEP is present, slice everything up to
+ * and including it. If not (no icon was rendered, or the user retyped the
+ * whole title from scratch), return the SUMMARY unchanged.
+ */
+export function stripSummaryPrefix(summary: string): string {
+  const idx = summary.indexOf(SEP);
+  if (idx < 0) return summary;
+  return summary.slice(idx + SEP.length);
+}
+
 export function obsidianUrl(vaultName: string, vaultPath: string): string {
   return `obsidian://open?vault=${encodeURIComponent(vaultName)}&file=${encodeURIComponent(
     vaultPath,
@@ -78,9 +99,18 @@ export function obsidianUrl(vaultName: string, vaultPath: string): string {
 /**
  * Render a single VEVENT. We pin DTSTAMP to a stable value derived from the
  * event so the body is deterministic — this lets us hash it for ETag.
+ *
+ * `statusIcon` (if provided) is prepended to SUMMARY with a single space.
  */
-export function renderEvent(row: EventRow, vaultName: string): string {
-  const summary = basenameNoExt(row.vault_path);
+export function renderEvent(
+  row: EventRow,
+  vaultName: string,
+  statusIcon?: string,
+): string {
+  const baseSummary = basenameNoExt(row.vault_path);
+  // Visible space between icon and name; ZWSP marks the boundary so PUT can
+  // strip the prefix back off without needing to know which icon was used.
+  const summary = statusIcon ? `${statusIcon} ${SEP}${baseSummary}` : baseSummary;
   const url = obsidianUrl(vaultName, row.vault_path);
   const dtstart = formatDtstart(row.date_value);
   const stableDtstamp = "19700101T000000Z"; // deterministic for ETag stability
@@ -191,7 +221,7 @@ export function parseEvent(body: string): ParsedEvent {
         break;
       }
       case "SUMMARY":
-        summary = unescapeText(line.value);
+        summary = stripSummaryPrefix(unescapeText(line.value));
         break;
       case "DTSTART": {
         const allDay = line.params["VALUE"] === "DATE";

@@ -7,7 +7,13 @@
       "vault_name": "Personal",
       "folder": "Tasks",
       "property": "due",
-      "color": "#7C3AED"
+      "color": "#7C3AED",
+      "status_property": "Status",
+      "status_icons": {
+        "Not started": "◎",
+        "In progress": "◎",
+        "Complete": "◉"
+      }
     },
     {
       "id": "work-events",

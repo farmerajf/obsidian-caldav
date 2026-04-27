@@ -4,6 +4,7 @@ import type { VaultWriter } from "../vault/writer.js";
 import type { Logger } from "../logger.js";
 import { parseEvent } from "./ics.js";
 import { computeEtag } from "../sync/reconciler.js";
+import { resolveStatusIcon } from "../status.js";
 
 export async function handlePut(
   req: FastifyRequest,
@@ -75,13 +76,16 @@ export async function handlePut(
     }
   }
 
-  // 3) Update DB row to reflect what we just wrote
-  const etag = computeEtag(ev.uid, vaultPath, newDate, cal.vault_name);
+  // 3) Update DB row to reflect what we just wrote. Status comes from
+  //    frontmatter and isn't carried in the PUT body — preserve it.
+  const icon = resolveStatusIcon(ev.status_value, cal.status_icons);
+  const etag = computeEtag(ev.uid, vaultPath, newDate, cal.vault_name, icon);
   ctx.store.upsertEvent({
     uid: ev.uid,
     calendar_id: cal.id,
     vault_path: vaultPath,
     date_value: newDate,
+    status_value: ev.status_value,
     etag,
   });
   ctx.store.bumpCtag(cal.id);

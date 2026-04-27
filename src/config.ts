@@ -22,6 +22,12 @@ const CalendarSchema = z.object({
     .regex(/^#[0-9A-Fa-f]{6}$/, "color must be #RRGGBB")
     .optional(),
   description: z.string().optional(),
+  /**
+   * Optional frontmatter key whose value is mapped to a SUMMARY prefix via
+   * `status_icons`. Matching is case-insensitive after trim.
+   */
+  status_property: z.string().min(1).optional(),
+  status_icons: z.record(z.string(), z.string().min(1)).optional(),
 });
 
 export type CalendarConfig = z.infer<typeof CalendarSchema>;

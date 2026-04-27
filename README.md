@@ -63,6 +63,16 @@ precedence over each other in this order: env > inline > file.
 | `property` | yes | Frontmatter key whose value is the event date |
 | `color` | no | `#RRGGBB` calendar color shown in Apple Calendar |
 | `description` | no | Per-calendar description shown by some clients |
+| `status_property` | no | Frontmatter key whose value selects an icon to prepend to the event title |
+| `status_icons` | no | Map of status value → icon string (e.g. `{ "Complete": "◉" }`). Values can repeat |
+
+If both `status_property` and `status_icons` are set, the server reads that
+frontmatter key from each note and, if its value (case-insensitively, after
+trim) matches a key in `status_icons`, prepends the matched icon to the
+event's SUMMARY. The icon is separated from the filename by a hidden U+200B
+marker, so renaming the event in Apple Calendar never pushes the icon into
+the underlying `.md` filename — even after you change which icon a status
+maps to.
 
 Calendar `id`s must be unique across the whole config. Within a single vault,
 calendar folders must be disjoint (no duplicates, no prefix overlap). Two

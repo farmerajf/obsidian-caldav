@@ -7,6 +7,8 @@ export interface EventRow {
   calendar_id: string;
   vault_path: string;
   date_value: string;
+  /** Optional raw status value pulled from the configured status_property. */
+  status_value: string | null;
   etag: string;
   tombstoned: 0 | 1;
   updated_at: number;
@@ -17,7 +19,7 @@ export interface PendingWrite {
   expected_mtime_ms: number;
 }
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -29,6 +31,7 @@ CREATE TABLE IF NOT EXISTS events (
   calendar_id  TEXT NOT NULL DEFAULT 'tasks',
   vault_path   TEXT NOT NULL,
   date_value   TEXT NOT NULL,
+  status_value TEXT,
   etag         TEXT NOT NULL,
   tombstoned   INTEGER NOT NULL DEFAULT 0,
   updated_at   INTEGER NOT NULL
@@ -104,6 +107,7 @@ export class Store {
     if (current < 1) this.upgradeToV1();
     if (current < 2) this.upgradeToV2();
     if (current < 3) this.upgradeToV3();
+    if (current < 4) this.upgradeToV4();
 
     // Make sure schema_version reflects the final version (covers the case
     // where we just created it during upgradeToV1).
@@ -185,6 +189,19 @@ export class Store {
     `);
   }
 
+  /**
+   * v3 → v4: optional status_value column on events. Existing rows get NULL
+   * — unchanged behavior for users who don't configure status_property.
+   */
+  private upgradeToV4(): void {
+    const cols = this.db
+      .prepare(`PRAGMA table_info(events)`)
+      .all() as Array<{ name: string }>;
+    if (!cols.some((c) => c.name === "status_value")) {
+      this.db.exec(`ALTER TABLE events ADD COLUMN status_value TEXT`);
+    }
+  }
+
   /** Ensure a ctag row exists for each known calendar id. Idempotent. */
   ensureCalendars(calendarIds: string[]): void {
     const stmt = this.db.prepare(
@@ -236,15 +253,16 @@ export class Store {
   upsertEvent(row: Omit<EventRow, "tombstoned" | "updated_at">): void {
     this.db
       .prepare(
-        `INSERT INTO events (uid, calendar_id, vault_path, date_value, etag, tombstoned, updated_at)
-         VALUES (@uid, @calendar_id, @vault_path, @date_value, @etag, 0, @updated_at)
+        `INSERT INTO events (uid, calendar_id, vault_path, date_value, status_value, etag, tombstoned, updated_at)
+         VALUES (@uid, @calendar_id, @vault_path, @date_value, @status_value, @etag, 0, @updated_at)
          ON CONFLICT(uid) DO UPDATE SET
-           calendar_id = excluded.calendar_id,
-           vault_path  = excluded.vault_path,
-           date_value  = excluded.date_value,
-           etag        = excluded.etag,
-           tombstoned  = 0,
-           updated_at  = excluded.updated_at`,
+           calendar_id  = excluded.calendar_id,
+           vault_path   = excluded.vault_path,
+           date_value   = excluded.date_value,
+           status_value = excluded.status_value,
+           etag         = excluded.etag,
+           tombstoned   = 0,
+           updated_at   = excluded.updated_at`,
       )
       .run({ ...row, updated_at: Date.now() });
   }

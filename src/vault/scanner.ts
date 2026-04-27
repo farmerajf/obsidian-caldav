@@ -10,6 +10,8 @@ export interface ScannedFile {
   absPath: string;
   /** Raw value from the date frontmatter property, normalized to ISO-ish string */
   dateValue: string;
+  /** Optional status frontmatter value, normalized to a trimmed string. */
+  statusValue: string | null;
   /** mtime in ms */
   mtimeMs: number;
 }
@@ -18,6 +20,8 @@ export interface ScannerOptions {
   vaultRoot: string;
   scanRoot: string;
   property: string;
+  /** Optional frontmatter key to read for the status icon. */
+  statusProperty?: string;
   logger: Logger;
 }
 
@@ -93,20 +97,34 @@ async function* walk(dir: string): AsyncGenerator<string> {
   }
 }
 
+function normalizeStatus(raw: unknown): string | null {
+  if (raw == null) return null;
+  if (typeof raw === "string") {
+    const t = raw.trim();
+    return t.length > 0 ? t : null;
+  }
+  if (typeof raw === "number" || typeof raw === "boolean") return String(raw);
+  return null;
+}
+
 export async function scanVault(opts: ScannerOptions): Promise<ScannedFile[]> {
   const results: ScannedFile[] = [];
   for await (const absPath of walk(opts.scanRoot)) {
     try {
       const content = await readFile(absPath, "utf8");
       const parsed = matter(content);
-      const raw = (parsed.data as Record<string, unknown>)[opts.property];
-      const dateValue = normalizeDateValue(raw);
+      const data = parsed.data as Record<string, unknown>;
+      const dateValue = normalizeDateValue(data[opts.property]);
       if (!dateValue) continue;
+      const statusValue = opts.statusProperty
+        ? normalizeStatus(data[opts.statusProperty])
+        : null;
       const st = await stat(absPath);
       results.push({
         vaultPath: toPosix(relative(opts.vaultRoot, absPath)),
         absPath,
         dateValue,
+        statusValue,
         mtimeMs: st.mtimeMs,
       });
     } catch (err) {
