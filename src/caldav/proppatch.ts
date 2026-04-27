@@ -41,16 +41,7 @@ function extractChanges(parsed: unknown): PropChange[] {
         if (isRemove) {
           changes.push({ name, value: undefined });
         } else {
-          // raw can be a string, number, boolean, or an object with text
-          // content. fast-xml-parser preserves the inner text under the key
-          // when it's a leaf element; treat anything else as empty string.
-          const value =
-            typeof raw === "string"
-              ? raw
-              : typeof raw === "number" || typeof raw === "boolean"
-                ? String(raw)
-                : "";
-          changes.push({ name, value });
+          changes.push({ name, value: extractText(raw) });
         }
       }
     }
@@ -59,6 +50,23 @@ function extractChanges(parsed: unknown): PropChange[] {
   collectFrom((root as Record<string, unknown>)["set"], false);
   collectFrom((root as Record<string, unknown>)["remove"], true);
   return changes;
+}
+
+/**
+ * fast-xml-parser surfaces a leaf element as a bare string, but if the
+ * element has attributes (Apple Calendar sends `symbolic-color="custom"` on
+ * <calendar-color>), it surfaces as an object with the text under "#text".
+ * Recover the text in either case.
+ */
+function extractText(raw: unknown): string {
+  if (typeof raw === "string") return raw;
+  if (typeof raw === "number" || typeof raw === "boolean") return String(raw);
+  if (raw && typeof raw === "object") {
+    const text = (raw as Record<string, unknown>)["#text"];
+    if (typeof text === "string") return text;
+    if (typeof text === "number" || typeof text === "boolean") return String(text);
+  }
+  return "";
 }
 
 interface PropResult {

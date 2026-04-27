@@ -582,6 +582,35 @@ describe("CalDAV server (multiple calendars, one vault)", () => {
     expect(res.body).toContain("403 Forbidden");
   });
 
+  it("PROPPATCH calendar-color with attributes (Apple's `symbolic-color`) is accepted", async () => {
+    const patch = await h.app.inject({
+      method: "PROPPATCH" as never,
+      url: `/calendars/${USER}/tasks/`,
+      headers: { authorization: AUTH, "content-type": "application/xml" },
+      payload: `<?xml version="1.0" encoding="utf-8"?>
+        <d:propertyupdate xmlns:d="DAV:" xmlns:ical="http://apple.com/ns/ical/">
+          <d:set>
+            <d:prop>
+              <ical:calendar-color symbolic-color="custom">#AABBCCFF</ical:calendar-color>
+            </d:prop>
+          </d:set>
+        </d:propertyupdate>`,
+    });
+    expect(patch.statusCode).toBe(207);
+    expect(patch.body).toContain("200 OK");
+    expect(patch.body).not.toContain("422");
+
+    const get = await h.app.inject({
+      method: "PROPFIND" as never,
+      url: `/calendars/${USER}/tasks/`,
+      headers: { authorization: AUTH, depth: "0", "content-type": "application/xml" },
+      payload: `<d:propfind xmlns:d="DAV:" xmlns:ical="http://apple.com/ns/ical/">
+        <d:prop><ical:calendar-color/></d:prop>
+      </d:propfind>`,
+    });
+    expect(get.body).toContain("#AABBCCFF");
+  });
+
   it("rejects bogus calendar-color values with 422", async () => {
     const res = await h.app.inject({
       method: "PROPPATCH" as never,
