@@ -11,7 +11,7 @@ const PRODID = "-//obsidian-caldav//EN";
  * never leaks into the .md filename even if the user later changes the
  * configured icon. The user almost certainly won't type a U+200B themselves.
  */
-const SEP = "​";
+export const SEP = "​";
 
 export interface ParsedEvent {
   uid: string;

@@ -2,7 +2,7 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 import { resolveRoute, type HandlerContext } from "./handlers.js";
 import type { VaultWriter } from "../vault/writer.js";
 import type { Logger } from "../logger.js";
-import { parseEvent } from "./ics.js";
+import { parseEvent, SEP } from "./ics.js";
 import { computeEtag } from "../sync/reconciler.js";
 import { resolveStatusIcon } from "../status.js";
 
@@ -79,18 +79,29 @@ export async function handlePut(
   // 3) Update DB row to reflect what we just wrote. Status comes from
   //    frontmatter and isn't carried in the PUT body — preserve it.
   const icon = resolveStatusIcon(ev.status_value, cal.status_icons);
-  const etag = computeEtag(ev.uid, vaultPath, newDate, cal.vault_name, icon);
+  const renderedEtag = computeEtag(ev.uid, vaultPath, newDate, cal.vault_name, icon);
   ctx.store.upsertEvent({
     uid: ev.uid,
     calendar_id: cal.id,
     vault_path: vaultPath,
     date_value: newDate,
     status_value: ev.status_value,
-    etag,
+    etag: renderedEtag,
   });
   ctx.store.bumpCtag(cal.id);
 
-  reply.header("ETag", etag).code(204).send();
+  // If the event should have an icon prefix but the submitted body didn't
+  // have it (the user edited it out in their calendar app), return an ETag
+  // that doesn't match the stored one. Apple Calendar will see the mismatch
+  // on the next PROPFIND and refetch the event — restoring the icon in the
+  // client UI. For PUTs that left the prefix intact, return the real ETag
+  // so we don't trigger a redundant refetch on every date drag.
+  const iconWasStrippedByUser = icon !== undefined && !body.includes(SEP);
+  const responseEtag = iconWasStrippedByUser
+    ? computeEtag(ev.uid, vaultPath, newDate, cal.vault_name, undefined)
+    : renderedEtag;
+
+  reply.header("ETag", responseEtag).code(204).send();
 }
 
 function basenameNoExt(p: string): string {

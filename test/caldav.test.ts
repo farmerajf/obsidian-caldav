@@ -872,6 +872,67 @@ describe("CalDAV server (status icons)", () => {
     expect(h.store.getEventByUid(ev.uid)?.vault_path).toBe("renamed-task.md");
   });
 
+  it("PUT without the icon prefix returns a different ETag so the client refetches and re-syncs the icon", async () => {
+    const ev = h.store.getAllLiveEvents("tasks").find((e) => e.vault_path === "open-task.md")!;
+    // User deleted the icon prefix in their calendar app. Body has no SEP.
+    const newBody = [
+      "BEGIN:VCALENDAR",
+      "BEGIN:VEVENT",
+      `UID:${ev.uid}@obsidian-caldav`,
+      "SUMMARY:open-task",
+      "DTSTART;VALUE=DATE:20260515",
+      "END:VEVENT",
+      "END:VCALENDAR",
+    ].join("\r\n");
+    const putRes = await h.app.inject({
+      method: "PUT",
+      url: `/calendars/${USER}/tasks/${encodeURIComponent(ev.uid)}.ics`,
+      headers: { authorization: AUTH, "content-type": "text/calendar" },
+      payload: newBody,
+    });
+    expect(putRes.statusCode).toBe(204);
+    const putEtag = putRes.headers["etag"] as string;
+
+    // Fetch the event — server still renders with the icon, and ETag differs
+    // from what PUT returned, so the client knows to refresh.
+    const getRes = await h.app.inject({
+      method: "GET",
+      url: `/calendars/${USER}/tasks/${encodeURIComponent(ev.uid)}.ics`,
+      headers: { authorization: AUTH },
+    });
+    expect(getRes.statusCode).toBe(200);
+    expect(getRes.body).toMatch(/SUMMARY:◎ ​open-task/);
+    expect(getRes.headers["etag"]).not.toBe(putEtag);
+  });
+
+  it("PUT that preserves the icon prefix returns the canonical ETag (no spurious refetch)", async () => {
+    const ev = h.store.getAllLiveEvents("tasks").find((e) => e.vault_path === "open-task.md")!;
+    // Apple sends back what we rendered — date change only, prefix intact.
+    const newBody = [
+      "BEGIN:VCALENDAR",
+      "BEGIN:VEVENT",
+      `UID:${ev.uid}@obsidian-caldav`,
+      "SUMMARY:◎ ​open-task",
+      "DTSTART;VALUE=DATE:20260520",
+      "END:VEVENT",
+      "END:VCALENDAR",
+    ].join("\r\n");
+    const putRes = await h.app.inject({
+      method: "PUT",
+      url: `/calendars/${USER}/tasks/${encodeURIComponent(ev.uid)}.ics`,
+      headers: { authorization: AUTH, "content-type": "text/calendar" },
+      payload: newBody,
+    });
+    expect(putRes.statusCode).toBe(204);
+    const putEtag = putRes.headers["etag"] as string;
+    const getRes = await h.app.inject({
+      method: "GET",
+      url: `/calendars/${USER}/tasks/${encodeURIComponent(ev.uid)}.ics`,
+      headers: { authorization: AUTH },
+    });
+    expect(getRes.headers["etag"]).toBe(putEtag);
+  });
+
   it("PUT with a SUMMARY that contains a stale icon (from cached client) is still stripped", async () => {
     const ev = h.store.getAllLiveEvents("tasks").find((e) => e.vault_path === "open-task.md")!;
     // User configured ◎ → ⏺ later; client still has SUMMARY rendered with ◎.
